@@ -4,6 +4,14 @@
 #include <time.h>
 #include "info.h"
 
+#if defined(_WIN32) || defined(_WIN64) // Windows
+#include <windows.h>
+#include <wincrypt.h>
+#else // Unix
+#include <unistd.h>
+#include <fcntl.h>
+#endif
+
 void generate_byte_key(unsigned char *buffer, size_t length)
 {
     for (size_t i = 0; i < length; i++)
@@ -70,16 +78,19 @@ void base64_encode(const unsigned char *input, char **output, size_t length)
     (*output)[j] = '\0'; // null-terminate the string
 }
 
-void parse_options(int argc, char const *argv[], char *type)
+void parse_options(int argc, char *argv[], char *type, unsigned int *seed, size_t *length)
 {
-    for (int i = 2; i < argc; i++)
+    *length = 0; // Initialize to 0 to detect unspecified length
+
+    for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--type") == 0)
         {
             if (i + 1 < argc)
             {
-                strncpy(type, argv[i + 1], 3);
-                type[4] = '\0'; // null-terminate the string
+                strncpy(type, argv[i + 1], 4);
+                type[4] = '\0'; // Correctly null-terminate the string
+                i++;            // Skip the next argument as it has been processed
             }
             else
             {
@@ -87,66 +98,135 @@ void parse_options(int argc, char const *argv[], char *type)
                 exit(1);
             }
         }
+        else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0)
+        {
+            if (i + 1 < argc)
+            {
+                *seed = (unsigned int)strtoul(argv[i + 1], NULL, 10);
+                i++; // Skip the next argument as it has been processed
+            }
+            else
+            {
+                fprintf(stderr, "No seed specified\n");
+                exit(1);
+            }
+        }
+        else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0)
+        {
+            print_version();
+            exit(0);
+        }
+        else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0)
+        {
+            print_help();
+            exit(0);
+        }
+        else
+        {
+            // Attempt to parse the length if not already set
+            if (*length == 0)
+            {
+                *length = (size_t)strtoul(argv[i], NULL, 10);
+                if (*length == 0)
+                {
+                    fprintf(stderr, "Invalid length specified\n");
+                    exit(1);
+                }
+            }
+            else
+            {
+                fprintf(stderr, "Unexpected argument: %s\n", argv[i]);
+                exit(1);
+            }
+        }
     }
+
+    if (*length == 0)
+    {
+        fprintf(stderr, "Length must be specified\n");
+        exit(1);
+    }
+}
+
+// Get a random seed from the system RNG
+unsigned int get_random_seed()
+{
+    unsigned int seed = 0;
+#if defined(_WIN32) || defined(_WIN64) // Windows
+    HCRYPTPROV Prov;
+    if (!CryptAcquireContext(&Prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
+    {
+        fprintf(stderr, "CryptAcquireContext failed\n");
+        exit(1);
+    }
+    if (!CryptGenRandom(Prov, sizeof(seed), (BYTE *)&seed))
+    {
+        fprintf(stderr, "CryptGenRandom failed\n");
+        exit(1);
+    }
+    CryptReleaseContext(Prov, 0);
+#else // Unix
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd == -1)
+    {
+        fprintf(stderr, "Failed to open /dev/urandom\n");
+        exit(1);
+    }
+    if (read(fd, &seed, sizeof(seed)) != sizeof(seed))
+    {
+        fprintf(stderr, "Failed to read from /dev/urandom\n");
+        exit(1);
+    }
+    close(fd);
+#endif
+    return seed;
 }
 
 int main(int argc, char const *argv[])
 {
-    srand((unsigned int)time(NULL)); // Seed the RNG once
-
-    if (argc == 1 || strcmp(argv[argc - 1], "-h") == 0 || strcmp(argv[1], "--help") == 0)
+    if (argc == 1)
     {
         print_help();
+        return 1;
     }
-    else if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0)
+
+    char type[5] = "b64";                  // default type
+    unsigned int seed = get_random_seed(); // default seed
+    size_t length = 0;
+
+    parse_options(argc, argv, type, &seed, &length); // Parse options including length
+
+    srand(seed); // Seed the RNG
+
+    // generate the key
+    unsigned char *key = (unsigned char *)malloc(length);
+    if (key == NULL)
     {
-        print_version();
+        fprintf(stderr, "Memory allocation failed\n");
+        return 1;
+    }
+    generate_byte_key(key, length);
+    if (strcmp(type, "b64") == 0)
+    {
+        char *b64_key;
+        base64_encode(key, &b64_key, length);
+        printf("%s\n", b64_key);
+        free(b64_key); // Free the allocated memory for b64_key
+    }
+    else if (strcmp(type, "hex") == 0)
+    {
+        for (size_t i = 0; i < length; i++)
+        {
+            printf("%02x ", key[i]);
+        }
+        printf("\n");
     }
     else
     {
-        char type[5] = "b64";            // default type
-        parse_options(argc, argv, type); // parse options
-
-        size_t length = (size_t)strtoul(argv[1], NULL, 10); // convert string to unsigned long (base 10)
-        if (length == 0)
-        {
-            fprintf(stderr, "Invalid length\n");
-            return 1;
-        }
-
-        // generate the key
-        unsigned char *key = (unsigned char *)malloc(length);
-        if (key == NULL)
-        {
-            fprintf(stderr, "Memory allocation failed\n");
-            return 1;
-        }
-        generate_byte_key(key, length);
-
-        // determine the output type
-        if (strcmp(type, "b64") == 0)
-        {
-            char *b64_key = NULL;
-            base64_encode(key, &b64_key, length);
-            if (b64_key != NULL)
-            {
-                printf("%s\n", b64_key);
-                free(b64_key); // free the memory
-            }
-        }
-        else if (strcmp(type, "hex") == 0)
-        {
-            for (size_t i = 0; i < length; i++)
-            {
-                printf("%02x ", key[i]);
-            }
-            printf("\n");
-        }
-        else
-        {
-            fprintf(stderr, "Invalid type\n");
-            return 1;
-        }
+        fprintf(stderr, "Invalid type specified\n");
+        return 1;
     }
+
+    free(key); // Free the allocated memory for key
     return 0;
 }

@@ -33,7 +33,8 @@ void print_help()
 
     printf("  length\t\t(Required) The length of the key in bytes to generate\n");
     printf("Options:\n");
-    printf("  -t, --type\t\tThe type of key to generate (b64: default, hex)\n");
+    printf("  -t, --type [b64|hex]\t\tThe type of key to generate\n");
+    printf("  -s, --seed [number]\t\tThe seed to use for the RNG\n");
 
     printf("\n");
     printf("  -h, --help\t\tDisplay this information\n");
