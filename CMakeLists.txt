@@ -6,3 +6,6 @@ project(keygen C)
 
 # Add an executable to the project using the specified source file
 add_executable(keygen src/main.c src/info.c)
+
+# set the C standard to C99
+set_property(TARGET keygen PROPERTY C_STANDARD 99)
